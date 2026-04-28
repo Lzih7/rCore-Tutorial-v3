@@ -1,13 +1,24 @@
 {
-    // Prevent "can't find crate for `test`" error on no_std
-    // Ref: https://github.com/rust-lang/vscode-rust/issues/729
-    // For vscode-rust plugin users:
-    "rust.target": "riscv64gc-unknown-none-elf",
-    "rust.all_targets": false,
-    // For Rust Analyzer plugin users:
-    "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
-    "rust-analyzer.checkOnSave.allTargets": false,
-    // "rust-analyzer.cargo.features": [
-    //     "board_qemu"
-    // ]
+  // ==================== 核心检查配置 ====================
+  // 使用 clippy 进行更严格的代码检查
+  "rust-analyzer.check.command": "clippy",
+  // 必须配置！rCore 是跨平台编译，必须指定目标架构为 RISC-V
+  // 否则 rust-analyzer 会默认用宿主机架构（如 x86_64）去 check，导致找不到 std 库大量报错
+  "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
+  // 启用构建脚本（如 build.rs）支持
+  "rust-analyzer.cargo.buildScripts.enable": true,
+
+  // ==================== 语法与提示增强 ====================
+  // 显示变量类型提示
+  "rust-analyzer.inlayHints.typeHints.enable": true,
+  // 显示函数参数名提示
+  "rust-analyzer.inlayHints.parameterHints.enable": true,
+  // 显示方法链的返回值类型
+  "rust-analyzer.inlayHints.chainingHints.enable": true,
+  // 生命周期省略提示
+  "rust-analyzer.inlayHints.lifetimeElisionHints.enable": "skip_trivial",
+
+  // ==================== 性能与范围优化 ====================
+  // 避免 rust-analyzer 和命令行 cargo build 产生锁冲突，为其设置独立的 target 目录
+  "rust-analyzer.rust.analyzerTargetDir": true
 }
