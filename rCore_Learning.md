@@ -436,3 +436,142 @@ pub fn sys_exit(xstate: i32) -> ! {
     run_next_app()
 }
 ```
+
+# ch3
+## 分时多任务操作系统
+```
+./os/src
+Rust        18 Files   511 Lines
+Assembly     3 Files    82 Lines
+
+├── bootloader
+│   └── rustsbi-qemu.bin
+├── LICENSE
+├── os
+│   ├── build.rs
+│   ├── Cargo.toml
+│   ├── Makefile
+│   └── src
+│       ├── batch.rs(移除：功能分别拆分到 loader 和 task 两个子模块)
+│       ├── config.rs(新增：保存内核的一些配置)
+│       ├── console.rs
+│       ├── entry.asm
+│       ├── lang_items.rs
+│       ├── link_app.S
+│       ├── linker-qemu.ld
+│       ├── loader.rs(新增：将应用加载到内存并进行管理)
+│       ├── main.rs(修改：主函数进行了修改)
+│       ├── sbi.rs(修改：引入新的 sbi call set_timer)
+│       ├── sync
+│       │   ├── mod.rs
+│       │   └── up.rs
+│       ├── syscall(修改：新增若干 syscall)
+│       │   ├── fs.rs
+│       │   ├── mod.rs
+│       │   └── process.rs
+│       ├── task(新增：task 子模块，主要负责任务管理)
+│       │   ├── context.rs(引入 Task 上下文 TaskContext)
+│       │   ├── mod.rs(全局任务管理器和提供给其他模块的接口)
+│       │   ├── switch.rs(将任务切换的汇编代码解释为 Rust 接口 __switch)
+│       │   ├── switch.S(任务切换的汇编代码)
+│       │   └── task.rs(任务控制块 TaskControlBlock 和任务状态 TaskStatus 的定义)
+│       ├── timer.rs(新增：计时器相关)
+│       └── trap
+│           ├── context.rs
+│           ├── mod.rs(修改：时钟中断相应处理)
+│           └── trap.S
+├── README.md
+├── rust-toolchain
+└── user
+    ├── build.py(新增：使用 build.py 构建应用使得它们占用的物理地址区间不相交)
+    ├── Cargo.toml
+    ├── Makefile(修改：使用 build.py 构建应用)
+    └── src
+        ├── bin(修改：换成第三章测例)
+        │   ├── 00power_3.rs
+        │   ├── 01power_5.rs
+        │   ├── 02power_7.rs
+        │   └── 03sleep.rs
+        ├── console.rs
+        ├── lang_items.rs
+        ├── lib.rs
+        ├── linker.ld
+        └── syscall.rs
+```
+### 多道程序的放置和加载
+- 在 ch2 中，我们将每个 app 都加载到相同的地址上，但在 ch3 中，由于有多个 app ，每个 app 都需要一个独立的物理地址区间
+- 我们可以使用 build.py 构建应用，使得它们占用的物理地址区间不相交
+- 我们可以在 loader.rs 中添加代码，将应用加载到内存中
+#### 构建应用 build.rs
+```python
+import os
+
+base_address = 0x80400000
+step = 0x20000
+linker = 'src/linker.ld'
+
+app_id = 0
+apps = os.listdir('src/bin')
+apps.sort()
+for app in apps:
+    app = app[:app.find('.')]
+    lines = []
+    lines_before = []
+    with open(linker, 'r') as f:
+        for line in f.readlines():
+            lines_before.append(line)
+            line = line.replace(hex(base_address), hex(base_address+step*app_id))
+            lines.append(line)
+    with open(linker, 'w+') as f:
+        f.writelines(lines)
+    os.system('cargo build --bin %s --release' % app)
+    print('[build.py] application %s start with address %s' %(app, hex(base_address+step*app_id)))
+    with open(linker, 'w+') as f:
+        f.writelines(lines_before)
+    app_id = app_id + 1
+```
+1. 找到 src/linker.ld 中的 `BASE_ADDRESS = 0x80400000;` 这一行，并将后面的地址替换为和当前应用对应的一个地址
+2. 使用 cargo build 构建当前的应用，注意我们可以使用 --bin 参数来只构建某一个应用
+3. 将 src/linker.ld 还原
+
+#### 加载应用
+```rust
+ // os/src/loader.rs
+
+ pub fn load_apps() {
+     extern "C" { fn _num_app(); }
+     let num_app_ptr = _num_app as usize as *const usize;
+     let num_app = get_num_app();
+     let app_start = unsafe {
+         core::slice::from_raw_parts(num_app_ptr.add(1), num_app + 1)
+     };
+     // load apps
+     for i in 0..num_app {
+         let base_i = get_base_i(i);
+         // clear region
+         (base_i..base_i + APP_SIZE_LIMIT).for_each(|addr| unsafe {
+             (addr as *mut u8).write_volatile(0)
+         });
+         // load app from data section to memory
+         let src = unsafe {
+             core::slice::from_raw_parts(
+                 app_start[i] as *const u8,
+                 app_start[i + 1] - app_start[i]
+             )
+         };
+         let dst = unsafe {
+             core::slice::from_raw_parts_mut(base_i as *mut u8, src.len())
+         };
+         dst.copy_from_slice(src);
+     }
+     unsafe {
+         asm!("fence.i");
+     }
+ }
+
+  // os/src/loader.rs
+
+ fn get_base_i(app_id: usize) -> usize {
+     APP_BASE_ADDRESS + app_id * APP_SIZE_LIMIT
+ }
+```
